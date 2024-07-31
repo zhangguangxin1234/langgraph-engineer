@@ -1,99 +1,73 @@
 from typing import TypedDict, Annotated, Sequence, Literal
 
-from functools import lru_cache
-from langchain_core.messages import BaseMessage
 from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langgraph.prebuilt import ToolNode
-from langgraph.graph import StateGraph, END, add_messages
+from langgraph.graph import StateGraph, END, MessagesState
 
-tools = [TavilySearchResults(max_results=1)]
+import requests
+import time
+from functools import lru_cache
+import functools
 
-@lru_cache(maxsize=4)
-def _get_model(model_name: str):
-    if model_name == "openai":
-        model = ChatOpenAI(temperature=0, model_name="gpt-4o")
-    elif model_name == "anthropic":
-        model =  ChatAnthropic(temperature=0, model_name="claude-3-sonnet-20240229")
+# Cache duration in seconds (24 hours)
+CACHE_DURATION = 24 * 60 * 60
+
+
+def time_based_cache(seconds):
+    def wrapper_cache(func):
+        func = lru_cache(maxsize=None)(func)
+        func.lifetime = seconds
+        func.expiration = time.time() + func.lifetime
+
+        @functools.wraps(func)
+        def wrapped_func(*args, **kwargs):
+            if time.time() >= func.expiration:
+                func.cache_clear()
+                func.expiration = time.time() + func.lifetime
+            return func(*args, **kwargs)
+
+        return wrapped_func
+
+    return wrapper_cache
+
+
+@time_based_cache(CACHE_DURATION)
+def load_github_file(url):
+    # Convert GitHub URL to raw content URL
+    raw_url = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+
+    # Send a GET request to the raw URL
+    response = requests.get(raw_url)
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        return response.text
     else:
-        raise ValueError(f"Unsupported model type: {model_name}")
-
-    model = model.bind_tools(tools)
-    return model
+        return f"Failed to load file. Status code: {response.status_code}"
 
 
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
+prompt = """You are tasked with answering questions about LangGraph functionality and bugs.
+Here is a long unit test file for LangGraph. This should contain a lot (but possibly not all) \
+relevant information on how to use LangGraph.
 
+<unit_test_file>
+{file}
+</unit_test_file>
 
-# Define the function that determines whether to continue or not
-def should_continue(state):
-    messages = state["messages"]
-    last_message = messages[-1]
-    # If there are no tool calls, then we finish
-    if not last_message.tool_calls:
-        return "end"
-    # Otherwise if there is, we continue
-    else:
-        return "continue"
+Based on the information above, attempt to answer the user's questions"""
 
-
-# Define the function that calls the model
-def call_model(state, config):
-    messages = state["messages"]
-    model_name = config.get('configurable', {}).get("model_name", "anthropic")
-    model = _get_model(model_name)
+def answer_question(state: MessagesState):
+    github_url = "https://github.com/langchain-ai/langgraph/blob/main/libs/langgraph/tests/test_pregel.py"
+    file_contents = load_github_file(github_url)
+    messages = [
+        {"role": "system", "content": prompt.format(file=file_contents)}
+    ] + state['messages']
+    model = ChatAnthropic(temperature=0, model_name="claude-3-5-sonnet-20240620")
     response = model.invoke(messages)
-    # We return a list, because this will get added to the existing list
     return {"messages": [response]}
 
-
-# Define the function to execute tools
-tool_node = ToolNode(tools)
-
-# Define the config
-class GraphConfig(TypedDict):
-    model_name: Literal["anthropic", "openai"]
-
-
 # Define a new graph
-workflow = StateGraph(AgentState, config_schema=GraphConfig)
-
-# Define the two nodes we will cycle between
-workflow.add_node("agent", call_model)
-workflow.add_node("action", tool_node)
-
-# Set the entrypoint as `agent`
-# This means that this node is the first one called
-workflow.set_entry_point("agent")
-
-# We now add a conditional edge
-workflow.add_conditional_edges(
-    # First, we define the start node. We use `agent`.
-    # This means these are the edges taken after the `agent` node is called.
-    "agent",
-    # Next, we pass in the function that will determine which node is called next.
-    should_continue,
-    # Finally we pass in a mapping.
-    # The keys are strings, and the values are other nodes.
-    # END is a special node marking that the graph should finish.
-    # What will happen is we will call `should_continue`, and then the output of that
-    # will be matched against the keys in this mapping.
-    # Based on which one it matches, that node will then be called.
-    {
-        # If `tools`, then we call the tool node.
-        "continue": "action",
-        # Otherwise we finish.
-        "end": END,
-    },
-)
-
-# We now add a normal edge from `tools` to `agent`.
-# This means that after `tools` is called, `agent` node is called next.
-workflow.add_edge("action", "agent")
-
-# Finally, we compile it!
-# This compiles it into a LangChain Runnable,
-# meaning you can use it as you would any other runnable
+workflow = StateGraph(MessagesState)
+workflow.add_node(answer_question)
+workflow.set_entry_point("answer_question")
+workflow.add_edge("answer_question", END)
 graph = workflow.compile()
