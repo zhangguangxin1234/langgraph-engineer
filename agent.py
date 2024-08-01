@@ -53,7 +53,16 @@ relevant information on how to use LangGraph.
 {file}
 </unit_test_file>
 
-Based on the information above, attempt to answer the user's questions"""
+Based on the information above, attempt to answer the user's questions. If you generate a code block, only \
+generate a single code block - eg lump all the code together (rather than splitting up). \
+You should encode helpful comments as part of that code block to understand what is going on. \
+ALWAYS just generate the simplest possible example - don't make assumptions that make it more complicated. \
+For "messages", these are a special object that looks like: {{"role": .., "content": ....}}
+
+If users ask for a messages key, use MessagesState which comes with a built in `messages` key. \
+You can import MessagesState from `langgraph.graph` and it is a TypedDict, so you can subclass it and add new keys to use as the graph state.
+
+Make sure any generated graphs have at least one edge that leads to the END node - you need to define a stopping criteria!"""
 
 def answer_question(state: MessagesState):
     github_url = "https://github.com/langchain-ai/langgraph/blob/main/libs/langgraph/tests/test_pregel.py"
