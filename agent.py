@@ -2,8 +2,10 @@ from typing import TypedDict, Annotated, Sequence, Literal, List
 import re
 
 from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END, MessagesState, add_messages
 from langchain_core.messages import RemoveMessage, AnyMessage, AIMessage
+from langchain_core.pydantic_v1 import BaseModel
 
 import requests
 import time
@@ -11,7 +13,7 @@ from functools import lru_cache
 import functools
 
 def extract_python_code(text):
-    pattern = r'```python\s*(.*?)\s*```'
+    pattern = r'```python\s*(.*?)\s*(```|$)'
     matches = re.findall(pattern, text, re.DOTALL)
     return matches
 
@@ -111,30 +113,41 @@ class Build(TypedDict):
     requirements: str
 
 
-class Accept(TypedDict):
+class Accept(BaseModel):
+    logic: str
     accept: bool
 
 class AgentState(MessagesState):
     requirements: str
     code: str
+    accepted: bool
 
-def draft_answer(state: AgentState):
+def _get_model(config, default, key):
+    model = config['configurable'].get(key, default)
+    if model == "openai":
+        return ChatOpenAI(temperature=0, model_name="gpt-4o-2024-08-06")
+    elif model == "anthropic":
+        return ChatAnthropic(temperature=0, model_name="claude-3-5-sonnet-20240620")
+    else:
+        raise ValueError
+
+def draft_answer(state: AgentState, config):
     github_url = "https://github.com/langchain-ai/langgraph/blob/main/libs/langgraph/tests/test_pregel.py"
     file_contents = load_github_file(github_url)
     messages = [
         {"role": "system", "content": prompt.format(file=file_contents)},
                    {"role": "user", "content": state.get('requirements')}
     ] + state['messages']
-    model = ChatAnthropic(temperature=0, model_name="claude-3-5-sonnet-20240620")
+    model = _get_model(config, "anthropic", "draft_model")
     response = model.invoke(messages)
     return {"messages": [response]}
 
 
-def gather_requirements(state: AgentState):
+def gather_requirements(state: AgentState, config):
     messages = [
        {"role": "system", "content": gather_prompt}
    ] + state['messages']
-    model = ChatAnthropic(temperature=0, model_name="claude-3-5-sonnet-20240620").bind_tools([Build])
+    model = _get_model(config, "openai", "gather_model").bind_tools([Build])
     response = model.invoke(messages)
     if len(response.tool_calls) == 0:
         return {"messages": [response]}
@@ -172,9 +185,10 @@ def check(state: AgentState):
         return {"messages": [{"role": "user", "content": error_parsing.format(error="Did not find a code block!")}]}
     if len(code_blocks) > 1:
         return {"messages": [{"role": "user", "content": error_parsing.format(error="Found multiple code blocks!")}]}
-    return {"code": code_blocks[0]}
+    return {"code": f"```python\n{code_blocks[0][0]}\n```"}
 
-def critique(state: AgentState):
+
+def critique(state: AgentState, config):
     github_url = "https://github.com/langchain-ai/langgraph/blob/main/libs/langgraph/tests/test_pregel.py"
     file_contents = load_github_file(github_url)
     messages = [
@@ -182,14 +196,27 @@ def critique(state: AgentState):
                    {"role": "assistant", "content": state.get('requirements')},
 
                ] + _swap_messages(state['messages'])
-    model = ChatAnthropic(temperature=0, model_name="claude-3-5-sonnet-20240620").bind_tools([Accept])
+    model = _get_model(config, "openai", "critique_model").with_structured_output(Accept)
     response = model.invoke(messages)
-    if len(response.tool_calls) == 0:
-        return {"messages": [{"role": "user", "content": response.content}]}
+    accepted = response.accept
+    if accepted:
+        return {
+            "messages": [
+                {"role": "user", "content": response.logic},
+                {"role": "assistant", "content": "okay, sending to user"}],
+            "accepted": True
+        }
+    else:
+        return {
+            "messages": [
+                {"role": "user", "content": response.logic},
+            ],
+            "accepted": False
+        }
 
 
 def route_critique(state: AgentState) -> Literal["draft_answer", END]:
-    if isinstance(state['messages'][-1], AIMessage):
+    if state['accepted']:
         return END
     else:
         return "draft_answer"
@@ -215,8 +242,18 @@ def route_gather(state: AgentState) -> Literal["draft_answer", END]:
         return END
 
 
+
+class OutputState(TypedDict):
+    code: str
+
+class GraphConfig(TypedDict):
+    gather_model: Literal['openai', 'anthropic']
+    draft_model: Literal['openai', 'anthropic']
+    critique_model: Literal['openai', 'anthropic']
+
+
 # Define a new graph
-workflow = StateGraph(AgentState, input=MessagesState)
+workflow = StateGraph(AgentState, input=MessagesState, output=OutputState, config_schema=GraphConfig)
 workflow.add_node(draft_answer)
 workflow.add_node(gather_requirements)
 workflow.add_node(critique)
