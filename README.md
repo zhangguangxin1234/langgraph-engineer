@@ -1,11 +1,31 @@
-# LangGraph Cloud Example
+# LangGraph Engineer
+
+[Try out the deployed version](https://smith.langchain.com/studio/thread?baseUrl=https://langgraph-engineer-23dacb3822e3589d80ff57de9ee94e1c.default.us.langgraph.app)
 
 ![](static/agent_ui.png)
 
-This is an example agent to deploy with LangGraph Cloud.
+This is an alpha version of an agent that can help bootstrap [LangGraph](https://github.com/langchain-ai/langgraph) applications. It will focus on creating the correct nodes and edges, but will not attempt to write the logic to fill in the nodes and edges - rather will leave that for you.
 
-[LangGraph](https://github.com/langchain-ai/langgraph) is a library for building stateful, multi-actor applications with LLMs. The main use cases for LangGraph are conversational agents, and long-running, multi-step LLM applications or any LLM application that would benefit from built-in support for persistent checkpoints, cycles and human-in-the-loop interactions (ie. LLM and human collaboration).
+## Agent Details
 
-LangGraph shortens the time-to-market for developers using LangGraph, with a one-liner command to start a production-ready HTTP microservice for your LangGraph applications, with built-in persistence. This lets you focus on the logic of your LangGraph graph, and leave the scaling and API design to us. The API is inspired by the OpenAI assistants API, and is designed to fit in alongside your existing services.
+The agent consists of a few steps:
 
-In order to deploy this agent to LangGraph Cloud you will want to first fork this repo. After that, you can follow the instructions [here](https://langchain-ai.github.io/langgraph/cloud/) to deploy to LangGraph Cloud.
+1. Converse with the user to gather all requirements
+2. Write a draft
+3. Run programatic checks against the generated draft (right now just checking that the response has the right format). If it fails, then go back to step 2. If it passes, then continue to step 4.
+4. Run an LLM critique against the generated draft. If it fails, go back to step 2. If it passes, the continue to the end.
+
+## How to run
+
+[Try out the deployed version](https://smith.langchain.com/studio/thread?baseUrl=https://langgraph-engineer-23dacb3822e3589d80ff57de9ee94e1c.default.us.langgraph.app)
+
+You can run this code locally with [LangGraph Studio](https://github.com/langchain-ai/langgraph-studio)
+
+You can deploy the code yourself to [LangGraph Cloud](https://langchain-ai.github.io/langgraph/cloud/#overview)
+
+
+## Future direction:
+
+ - Run more programatic checks (linting, checking imports)
+ - Try to run the generated code
+ - Attempt to generate code for the nodes and edges
