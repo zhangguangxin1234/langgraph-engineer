@@ -5,7 +5,7 @@
     "."
   ],
   "graphs": {
-    "agent": "./agent.py:graph"
+    "engineer": "./src/langgraph_engineer/agent.py:graph"
   },
   "env": [
     "ANTHROPIC_API_KEY",
